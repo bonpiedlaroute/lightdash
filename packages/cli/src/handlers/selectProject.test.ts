@@ -36,12 +36,36 @@ const mockPreviewProjectResponse = (uuid: string) => {
     } as never);
 };
 
+const ttyDescriptors = {
+    stdin: Object.getOwnPropertyDescriptor(process.stdin, 'isTTY'),
+    stdout: Object.getOwnPropertyDescriptor(process.stdout, 'isTTY'),
+};
+const setTTY = (tty: { stdin: boolean; stdout: boolean }) => {
+    Object.defineProperty(process.stdin, 'isTTY', {
+        configurable: true,
+        value: tty.stdin,
+    });
+    Object.defineProperty(process.stdout, 'isTTY', {
+        configurable: true,
+        value: tty.stdout,
+    });
+};
+const restoreTTY = () => {
+    (['stdin', 'stdout'] as const).forEach((name) => {
+        const descriptor = ttyDescriptors[name];
+        if (descriptor)
+            Object.defineProperty(process[name], 'isTTY', descriptor);
+        else Reflect.deleteProperty(process[name], 'isTTY');
+    });
+};
+
 describe('selectProject', () => {
     beforeEach(() => {
         vi.stubEnv('LIGHTDASH_PROJECT', undefined);
     });
 
     afterEach(() => {
+        restoreTTY();
         vi.resetAllMocks();
         vi.restoreAllMocks();
         vi.unstubAllEnvs();
@@ -210,6 +234,45 @@ describe('selectProject', () => {
             expect(inquirer.prompt).not.toHaveBeenCalled();
         },
     );
+
+    it.each([
+        { stdin: false, stdout: false },
+        { stdin: false, stdout: true },
+        { stdin: true, stdout: false },
+    ])(
+        'uses the active preview without prompting when there is no TTY (%o)',
+        async (tty) => {
+            vi.spyOn(GlobalState, 'isNonInteractive').mockReturnValue(false);
+            setTTY(tty);
+            mockPreviewProjectResponse(PREVIEW_UUID);
+
+            expect(
+                await selectProject({
+                    context: {
+                        project: MAIN_UUID,
+                        previewProject: PREVIEW_UUID,
+                    },
+                }),
+            ).toEqual({ projectUuid: PREVIEW_UUID, isPreview: true });
+            expect(inquirer.prompt).not.toHaveBeenCalled();
+        },
+    );
+
+    it('asks which project to use with an active preview in a terminal', async () => {
+        vi.spyOn(GlobalState, 'isNonInteractive').mockReturnValue(false);
+        setTTY({ stdin: true, stdout: true });
+        mockPreviewProjectResponse(PREVIEW_UUID);
+        vi.mocked(inquirer.prompt).mockResolvedValueOnce({
+            selectedProject: 'production',
+        } as never);
+
+        expect(
+            await selectProject({
+                context: { project: MAIN_UUID, previewProject: PREVIEW_UUID },
+            }),
+        ).toEqual({ projectUuid: MAIN_UUID, isPreview: false });
+        expect(inquirer.prompt).toHaveBeenCalledTimes(1);
+    });
 
     it('returns the main project when only the main project is configured', async () => {
         const config: Config = {

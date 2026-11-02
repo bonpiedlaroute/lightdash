@@ -144,10 +144,15 @@ export const selectProject = async (
 
     // Both are available - need to choose
     if (mainProject && previewProject) {
-        // In non-interactive mode, default to preview project
-        if (GlobalState.isNonInteractive()) {
+        // Without a terminal (CI, scripts, agents) the prompt can't be
+        // answered, so default to the preview project
+        const canPrompt =
+            !GlobalState.isNonInteractive() &&
+            process.stdin.isTTY === true &&
+            process.stdout.isTTY === true;
+        if (!canPrompt) {
             GlobalState.debug(
-                '> Non-interactive mode with active preview, using preview project',
+                '> Non-interactive mode or no TTY with active preview, using preview project',
             );
             return { projectUuid: previewProject, isPreview: true };
         }
